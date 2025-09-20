@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import torch
 from subprocess import run as sh
-from data_loader import make_training_samples
+from .data_loader import make_training_samples
 
 def ensure_dir(p): os.makedirs(p, exist_ok=True)
 

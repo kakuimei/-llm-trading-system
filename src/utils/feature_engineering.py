@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from typing import List
-from prompt import PROMPT_TEMPLATE
+from .prompt import PROMPT_TEMPLATE
 
 def clean_news_text(text: str) -> str:
     text = text.replace("\n"," ").replace("\t"," ")
@@ -29,10 +29,10 @@ def add_technical_features(df: pd.DataFrame) -> pd.DataFrame:
         g["rsi_14"] = 100 - 100/(1+rs)
         # fill
         for col in ["ret_1d","ret_5d","vol_20d","rsi_14"]:
-            g[col] = g[col].replace([np.inf,-np.inf], np.nan).fillna(method="bfill").fillna(method="ffill")
+            g[col] = g[col].replace([np.inf, -np.inf], np.nan).bfill().ffill()
         return g
 
-    out = df.groupby("ticker", group_keys=False).apply(per_ticker)
+    out = df.groupby("ticker", group_keys=False).apply(per_ticker, include_groups=True)
     return out
 
 def build_prompt(

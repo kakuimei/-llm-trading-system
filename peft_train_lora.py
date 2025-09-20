@@ -13,11 +13,13 @@ def set_seed(seed: int):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
-def build_text(example, add_reason=False):
-    prompt = example["input"]
-    out = example["output"]
-    ans = {"direction": out.get("direction", "neutral"),
-           "confidence": float(out.get("confidence", 0.5))}
+def build_text(ex, add_reason=False):
+    prompt = ex["input"]
+    out = ex["output"]
+    ans = {
+        "direction": out.get("direction", "neutral"),
+        "confidence": float(out.get("confidence", 0.5)),
+    }
     if add_reason and "reason" in out:
         ans["reason"] = out["reason"]
     target = json.dumps(ans, ensure_ascii=False)
@@ -25,8 +27,7 @@ def build_text(example, add_reason=False):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_name", type=str, required=True,
-                        help="e.g. meta-llama/Llama-3-8B-Instruct or mistralai/Mistral-7B-Instruct-v0.3")
+    parser.add_argument("--model_name", type=str, required=True)
     parser.add_argument("--train_file", type=str, default="./outputs/datasets/train.jsonl")
     parser.add_argument("--valid_file", type=str, default="./outputs/datasets/valid.jsonl")
     parser.add_argument("--output_dir", type=str, default="./outputs/peft_lora_ckpt")
@@ -40,29 +41,27 @@ def main():
     parser.add_argument("--r", type=int, default=16)
     parser.add_argument("--alpha", type=int, default=32)
     parser.add_argument("--dropout", type=float, default=0.05)
-    parser.add_argument("--target_modules", type=str, default="q_proj,v_proj", 
-                        help="comma-separated; common: q_proj,k_proj,v_proj,o_proj")
-    parser.add_argument("--load_4bit", action="store_true",
-                        help="Use bitsandbytes 4-bit for base model to save memory.")
+    parser.add_argument("--target_modules", type=str, default="q_proj,v_proj")
+    parser.add_argument("--load_4bit", action="store_true")
     args = parser.parse_args()
 
     set_seed(args.seed)
 
-    ds_train = load_dataset("json", data_files=args.train_file, split="train")
-    ds_valid = load_dataset("json", data_files=args.valid_file, split="train")
+    # ✅ 正确加载 JSONL
+    ds_train = load_dataset("json", data_files={"train": args.train_file})["train"]
+    ds_valid = load_dataset("json", data_files={"validation": args.valid_file})["validation"]
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, use_fast=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    def preprocess(examples):
-        texts = [build_text(ex, add_reason=False) for ex in examples]
+    def preprocess(batch):
+        texts = [build_text({"input": i, "output": o}) for i, o in zip(batch["input"], batch["output"])]
         toks = tokenizer(
             texts,
             padding="max_length",
             truncation=True,
             max_length=args.max_len,
-            return_tensors=None,
         )
         toks["labels"] = toks["input_ids"].copy()
         return toks
@@ -70,7 +69,7 @@ def main():
     ds_train = ds_train.map(preprocess, batched=True, remove_columns=ds_train.column_names)
     ds_valid = ds_valid.map(preprocess, batched=True, remove_columns=ds_valid.column_names)
 
-    # 加载基础模型（可选4-bit量化以省显存）
+    # 载入基础模型
     if args.load_4bit:
         from transformers import BitsAndBytesConfig
         bnb_config = BitsAndBytesConfig(
@@ -88,18 +87,14 @@ def main():
     else:
         model = AutoModelForCausalLM.from_pretrained(
             args.model_name,
-            torch_dtype=torch.bfloat16 if args.bf16 else None,
+            dtype=torch.bfloat16 if args.bf16 else None,
             device_map="auto",
         )
 
     target_modules = [m.strip() for m in args.target_modules.split(",") if m.strip()]
     lora_cfg = LoraConfig(
-        r=args.r,
-        lora_alpha=args.alpha,
-        lora_dropout=args.dropout,
-        bias="none",
-        target_modules=target_modules,
-        task_type="CAUSAL_LM",
+        r=args.r, lora_alpha=args.alpha, lora_dropout=args.dropout,
+        bias="none", target_modules=target_modules, task_type="CAUSAL_LM",
     )
     model = get_peft_model(model, lora_cfg)
     model.print_trainable_parameters()
@@ -115,7 +110,7 @@ def main():
         learning_rate=args.lr,
         warmup_ratio=0.03,
         logging_steps=50,
-        evaluation_strategy="steps",
+        eval_strategy="steps",
         eval_steps=500,
         save_steps=500,
         save_total_limit=2,
@@ -131,7 +126,7 @@ def main():
         args=train_args,
         train_dataset=ds_train,
         eval_dataset=ds_valid,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         data_collator=collator,
     )
 

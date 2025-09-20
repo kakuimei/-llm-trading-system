@@ -111,23 +111,24 @@ def time_split(df: pd.DataFrame,
             dfx[dfx[date_col].isin(test_dates)].copy())
 
 
-def make_training_samples(df: pd.DataFrame, horizon: int = 1, threshold: float = 0.001):
+def make_training_samples(df: pd.DataFrame, threshold: float = 0.001):
     samples = []
     for _, row in df.iterrows():
-        # 构造标签：次日收益
-        ret_next = row["close_next"] / row["close"] - 1 if "close_next" in row else None
-        if ret_next is None:
+        ret_next = row.get("ret_1d", None)
+        if ret_next is None or pd.isna(ret_next):
             continue
+
         if ret_next > threshold:
             direction = "bullish"
         elif ret_next < -threshold:
             direction = "bearish"
         else:
             direction = "neutral"
+
         confidence = min(1.0, abs(ret_next) / 0.05)  # 简单归一化
 
         # 构造 prompt（训练时禁止 RAG，防止泄露）
-        prompt = build_prompt(row, context_docs=None, use_rag=False)
+        prompt = build_prompt(row, context_docs=None)
 
         samples.append({
             "input": prompt,

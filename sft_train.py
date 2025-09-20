@@ -12,16 +12,17 @@ def set_seed(seed: int):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
-def build_text(example, add_reason=False):
+def build_text(ex, add_reason=False):
     """
-    将一条样本拼成：<PROMPT>\n\nAnswer:\n{ "direction": "...", "confidence": 0.xx }
-    训练时作为LM目标；验证同理。
+    ex: {"input": ..., "output": {...}}
+    训练格式：<PROMPT>\n\nAnswer:\n{"direction": "...", "confidence": 0.xx}
     """
-    prompt = example["input"]
-    out = example["output"]
-    # 只用 direction+confidence；reason 可选
-    ans = {"direction": out.get("direction", "neutral"),
-           "confidence": float(out.get("confidence", 0.5))}
+    prompt = ex["input"]
+    out = ex["output"]
+    ans = {
+        "direction": out.get("direction", "neutral"),
+        "confidence": float(out.get("confidence", 0.5)),
+    }
     if add_reason and "reason" in out:
         ans["reason"] = out["reason"]
     target = json.dumps(ans, ensure_ascii=False)
@@ -29,8 +30,7 @@ def build_text(example, add_reason=False):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_name", type=str, required=True,
-                        help="e.g. meta-llama/Llama-3-8B-Instruct or mistralai/Mistral-7B-Instruct-v0.3")
+    parser.add_argument("--model_name", type=str, required=True)
     parser.add_argument("--train_file", type=str, default="./outputs/datasets/train.jsonl")
     parser.add_argument("--valid_file", type=str, default="./outputs/datasets/valid.jsonl")
     parser.add_argument("--output_dir", type=str, default="./outputs/sft_ckpt")
@@ -46,24 +46,23 @@ def main():
 
     set_seed(args.seed)
 
-    # 加载数据：JSON Lines，字段 input/output/meta
-    ds_train = load_dataset("json", data_files=args.train_file, split="train")
-    ds_valid = load_dataset("json", data_files=args.valid_file, split="train")
+    # ✅ 正确加载本地 JSONL：用命名 split
+    ds_train = load_dataset("json", data_files={"train": args.train_file})["train"]
+    ds_valid = load_dataset("json", data_files={"validation": args.valid_file})["validation"]
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, use_fast=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    def preprocess(examples):
-        texts = [build_text(ex, add_reason=False) for ex in examples]
+    # ✅ 批处理的正确写法：batch 是列名->list
+    def preprocess(batch):
+        texts = [build_text({"input": i, "output": o}) for i, o in zip(batch["input"], batch["output"])]
         toks = tokenizer(
             texts,
             padding="max_length",
             truncation=True,
             max_length=args.max_len,
-            return_tensors=None,
         )
-        # 因为是因果LM，labels = input_ids（标准SFT方式）
         toks["labels"] = toks["input_ids"].copy()
         return toks
 
@@ -72,7 +71,7 @@ def main():
 
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name,
-        torch_dtype=torch.bfloat16 if args.bf16 else (torch.float16 if args.fp16 else None),
+        dtype=torch.bfloat16 if args.bf16 else (torch.float16 if args.fp16 else None),
         device_map="auto"
     )
 
@@ -87,7 +86,7 @@ def main():
         learning_rate=args.lr,
         warmup_ratio=0.03,
         logging_steps=50,
-        evaluation_strategy="steps",
+        eval_strategy="steps",
         eval_steps=500,
         save_steps=500,
         save_total_limit=2,
@@ -104,7 +103,7 @@ def main():
         args=train_args,
         train_dataset=ds_train,
         eval_dataset=ds_valid,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         data_collator=collator,
     )
 
