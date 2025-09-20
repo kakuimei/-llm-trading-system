@@ -1,0 +1,34 @@
+# macOS 系统文件
+.DS_Store
+.CFUserTextEncoding
+
+# 用户历史和配置
+.bash_history
+.bash_profile
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.swp
+
+# VS Code
+.vscode/
+
+# Conda/Micromamba 环境
+.ai-navigator/
+micromamba/
+.env/
+.venv/
+
+# 模型/大文件
+*.bin
+*.ckpt
+*.pt
+*.safetensors
+*.h5
+*.arrow
+
+# 其他
+outputs/
